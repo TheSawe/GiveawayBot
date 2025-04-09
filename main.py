@@ -1,48 +1,34 @@
+from telethon.tl.functions.channels import JoinChannelRequest
 from telethon import TelegramClient, events
 from telethon.tl import types
 import webbrowser
 import subprocess
 import pyautogui
+from datetime import datetime
 import asyncio
-import time
 import re
-from telethon import utils
+from config import *
 
-api_id = 23857603
-api_hash = '9be22fb9244d6b0cc71e968ce198029a'
-phone = '+79224274002'
-
-button_in_miniapp_x = 657
-button_in_miniapp_y = 743
-
-close_miniapp_x = 471
-close_miniapp_y = 111
-
-client = TelegramClient('giveaway_bot', api_id, api_hash)
-
-processing_counter = 0
-cooldown_active = False
-cooldown_task = None
+client = TelegramClient(session_name, api_id, api_hash)
 
 async def reset_cooldown():
-    global processing_counter, cooldown_active, cooldown_task
-    await asyncio.sleep(1000)  # Таймер 1000 секунд
+    global processing_counter, cooldown_active
+    await asyncio.sleep(time2sleep)
     processing_counter = 0
     cooldown_active = False
-    cooldown_task = None
-    print("Таймер сброшен, обработка возобновлена")
+    print("Non-spamblock break ended")
 
 async def main():
     try:
         await client.start(phone)
-        print("Client started")
+        print(f"[{str(datetime.now())[:-7]}] Client started")
         await client.run_until_disconnected()
     except Exception as e:
-        print("Error connecting to Telegram", e)
+        print("Wrong phone number or security code", e)
     finally:
         if client.is_connected():
             await client.disconnect()
-            print("Disconnected")
+            print(f"[{str(datetime.now())[:-7]}] Client ended")
 
 
 def close_brave_tabs():
@@ -57,10 +43,11 @@ def close_brave_tabs():
             return tab_count
         end tell
         """
+
         result = subprocess.run(['osascript', '-e', count_tabs_script], capture_output=True, text=True, check=True)
         tab_count = int(result.stdout.strip())
 
-        if tab_count >= 10:
+        if tab_count >= max_tabs2open:
             close_tabs_script = """
             tell application "Brave Browser"
                 set window_count to count windows
@@ -76,89 +63,80 @@ def close_brave_tabs():
             end tell
             """
             subprocess.run(['osascript', '-e', close_tabs_script], check=True)
-            print("Вкладки Brave Browser закрыты (оставлена одна).")
-        else:
-            print(f"Количество вкладок в Brave Browser: {tab_count}.  Закрытие не требуется.")
 
 
-    except subprocess.CalledProcessError as e:
-        print(f"Ошибка выполнения AppleScript: {e}")
-    except ValueError as e:
-        print(
-            f"Ошибка преобразования результата AppleScript в число: {e} (result: {result.stdout.strip() if 'result' in locals() else 'Нет результата'})")
-
-    except Exception as e:
-        print(f"Произошла непредвиденная ошибка: {e}")
+    except subprocess.CalledProcessError as ae:
+        print(f"[{str(datetime.now())[:-7]}] AppleScript error: {ae}")
+    except ValueError as ve:
+        print(f"[{str(datetime.now())[:-7]}] AppleScript value error: {ve}")
+    except Exception as ex:
+        print(f"[{str(datetime.now())[:-7]}] Unexpected error: {ex}")
 
 
-def extract_links_from_entities(message):
-
-    links = []
-    if message.entities:
-        for entity in message.entities:
-            if isinstance(entity, types.MessageEntityTextUrl):
-                links.append(entity.url)
-
-            elif isinstance(entity, types.MessageEntityUrl):
-                links.append(utils.get_text(message)[entity.offset:entity.offset + entity.length])
-    return links
+def extract_giveaway_link(message):
+    if message.reply_markup:
+        for row in message.reply_markup.rows:
+            for button in row.buttons:
+                if isinstance(button, types.KeyboardButtonUrl):
+                    url = button.url
+                    return url
 
 
-async def process_giveaway_message(message):
+async def join_channels(message):
     if message.text:
         usernames = re.findall(r'@([a-zA-Z0-9_]+)', message.text)
         if usernames:
-            print("Найдены упоминания каналов/пользователей:")
             for username in usernames:
                 full_username = '@' + username
-                print(f"  - {full_username}")
                 try:
                     entity = await client.get_entity(full_username)
-                    if isinstance(entity, types.Channel): # Исправлено: убрано types.Group
-                        from telethon.tl.functions.channels import JoinChannelRequest
+                    if isinstance(entity, types.Channel):
                         await client(JoinChannelRequest(entity))
-                        print(f"    Успешно подписался на канал: {full_username}")
-                    elif isinstance(entity, types.User): # Добавлено: проверка на types.User
-                        print(f"    {full_username} - это пользователь, подписка не требуется.")
-                    else:
-                        print(f"    {full_username} - это не канал и не пользователь, подписка пропущена.")  # Изменен вывод
-                except Exception as e:
-                    print(f"    Ошибка при подписке на {full_username}: {e}")
+                except Exception as se:
+                    print(f"[{str(datetime.now())[:-7]}] Subscribe {full_username} error: {se}")
+
+async def process_giveaway_message(message):
+    await join_channels(message)
 
     if "Gift Giveaway" in message.text:
-        if message.reply_markup:
-            for row in message.reply_markup.rows:
-                for button in row.buttons:
-                    if isinstance(button, types.KeyboardButtonUrl):
-                        print(f"\nURL: {button.url}")
-                        webbrowser.open(button.url)
-        time.sleep(6)
-        pyautogui.click(button_in_miniapp_x, button_in_miniapp_y)
+        url = extract_giveaway_link(message)
+        print(f"[{str(datetime.now())[:-7]}] Tonnel: {url}")
+        webbrowser.open(url)
+        await asyncio.sleep(6)
+        pyautogui.click(participate_button_x, participate_button_y)
         close_brave_tabs()
-        time.sleep(1)
-        pyautogui.click(close_miniapp_x, close_miniapp_y)
+        await asyncio.sleep(1)
+        pyautogui.click(close_button_x, close_button_y)
 
-    if "Розыгрыш" in message.text and "GiveShareBot" in extract_links_from_entities(message)[0]:
-        print(f"Найдено сообщение со словом 'Розыгрыш': {message.text}")
-        links = extract_links_from_entities(message)
-        for link in links:
-            print(link)
-            webbrowser.open(link)
+    if "https://t.me/BestRandom_bot?start=" in extract_giveaway_link(message):
+        url = extract_giveaway_link(message)
+        print(f"[{str(datetime.now())[:-7]}] BestRandom: {url}")
+        webbrowser.open(url)
+        close_brave_tabs()
 
 
-@client.on(events.NewMessage)
+@client.on(events.NewMessage(incoming=True))
 async def new_message_handler(event):
     global processing_counter, cooldown_active, cooldown_task
 
-    chat = await event.get_chat()
-    if hasattr(chat, 'username') and str(chat.username).lower() == 'gift3111' and "первым" in str(event.message.text).lower() :
-
-        try:
-            await event.reply('f')
-            print("Отправлен комментарий 'f' в канале gift3111")
-        except Exception as e:
-            print(f"Ошибка при отправке комментария: {e}")
+    if not event.message.text:
         return
+
+    # if "первым" in str(event.message.text).lower():
+    #     try:
+    #         for i in range(3):
+    #             await client.send_message(
+    #                 entity=-1002555136778,
+    #                 message='f',
+    #                 reply_to=event.message.id
+    #             )
+    #             print("Комментарий 'f' отправлен в группу обсуждений")
+    #     except Exception as e:
+    #         print(f"Ошибка: {e}")
+
+    message = event.message
+    if "https://t.me/BestRandom_bot?start=" in str(extract_giveaway_link(message)):
+        await process_giveaway_message(message)
 
     if not cooldown_active:
 
@@ -167,10 +145,10 @@ async def new_message_handler(event):
             processing_counter += 1
             await process_giveaway_message(message)
 
-        if processing_counter >= 30 and not cooldown_task:
+        if processing_counter >= participate2sleep:
             cooldown_active = True
             cooldown_task = asyncio.create_task(reset_cooldown())
-            print("Достигнут лимит 30 обработок, запущен таймер 1000 сек")
+            print(f"[{str(datetime.now())[:-7]}] Достигнут лимит {participate2sleep} обработок, запущен таймер {time2sleep} сек")
 
 
 if __name__ == "__main__":
@@ -178,7 +156,6 @@ if __name__ == "__main__":
     try:
         loop.run_until_complete(main())
     except Exception as e:
-        print(f"Exception caught in loop: {e}")
+        print(f"[{str(datetime.now())[:-7]}] {e}")
     finally:
         loop.close()
-        print("Program ended")
